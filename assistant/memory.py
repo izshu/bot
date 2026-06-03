@@ -3,7 +3,7 @@ import logging
 from datetime import datetime, timezone
 from .database import facts, projects
 from .llm import ask_memory
-from .config import MEMORY_PROMPT, ALLOWED_FACT_CATEGORIES, ALLOWED_PROJECT_STATUSES
+from .config import MEMORY_PROMPT, ALLOWED_FACT_CATEGORIES, ALLOWED_PROJECT_STATUSES, MEMORY_MIN_CONFIDENCE
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,29 @@ def get_facts(user_id: int) -> list:
 def get_projects(user_id: int) -> list:
     """Получение всех проектов пользователя"""
     return list(projects.find({"user_id": user_id}, {"_id": 0}))
+
+
+def build_memory_context(user_id: int) -> str:
+    """Формирование контекста памяти для системного промпта"""
+    user_facts = get_facts(user_id)
+    user_projects = get_projects(user_id)
+    if not user_facts and not user_projects:
+        return ""
+
+    context = "\n\nЧто я знаю о пользователе:"
+    if user_facts:
+        for f in user_facts:
+            context += f"\n- {f['category']}: {f['value']}"
+            if f.get("status"):
+                context += f" ({f['status']})"
+    if user_projects:
+        context += "\n\nПроекты:"
+        for p in user_projects:
+            context += f"\n- {p['name']} ({p['status']})"
+            if p.get("notes"):
+                for note in p["notes"][-3:]:
+                    context += f"\n  • {note}"
+    return context
 
 
 def save_fact(user_id: int, fact: dict):
@@ -117,7 +140,7 @@ async def analyze_memory(user_id: int, message: str):
             logger.info(f"Memory parsed OK: {parsed}")
 
             for fact in parsed.get("facts", []):
-                if fact.get("confidence", 0) >= 0.8:
+                if fact.get("confidence", 0) >= MEMORY_MIN_CONFIDENCE:
                     save_fact(user_id, fact)
 
             for project in parsed.get("projects", []):

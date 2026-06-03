@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 from aiogram import types
 from .database import conversations
-from .config import MAX_HISTORY, MAX_MESSAGES
+from .config import CONTEXT_WINDOW_SIZE, MAX_STORED_MESSAGES
 
 
 def save_message(user_id: int, role: str, content: str):
@@ -13,13 +13,13 @@ def save_message(user_id: int, role: str, content: str):
 
 def get_history(user_id: int) -> list:
     """Получение истории диалога"""
-    docs = conversations.find({"user_id": user_id}, sort=[("created_at", -1)], limit=MAX_HISTORY)
+    docs = conversations.find({"user_id": user_id}, sort=[("created_at", -1)], limit=CONTEXT_WINDOW_SIZE)
     docs = list(docs)
     docs.reverse()
-    return [{"role": d["role"], "content": d["content"]} for d in docs]
+    return [{"role": d["role"], "content": d["content"]} for d in docs if d["role"] in ("user", "assistant")]
 
 
-def trim_history(user_id: int, max_messages: int = MAX_MESSAGES):
+def trim_history(user_id: int, max_messages: int = MAX_STORED_MESSAGES):
     """Обрезка старой истории"""
     count = conversations.count_documents({"user_id": user_id})
     if count <= max_messages:

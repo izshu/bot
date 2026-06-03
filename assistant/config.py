@@ -17,8 +17,9 @@ OMNI_URL = os.getenv("OMNI_URL")
 MONGODB_URI = os.getenv("MONGODB_URI")
 
 # Константы
-MAX_HISTORY = 50
-MAX_MESSAGES = 500
+CONTEXT_WINDOW_SIZE = 50  # Сколько сообщений передаётся в контекст модели
+MAX_STORED_MESSAGES = 500  # Сколько сообщений хранится в БД на пользователя
+MEMORY_MIN_CONFIDENCE = 0.8  # Минимальный порог для сохранения фактов
 MODEL_NAME = "kr/claude-sonnet-4.5"
 
 # Валидация памяти
