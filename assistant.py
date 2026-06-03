@@ -274,6 +274,7 @@ async def help_cmd(message: types.Message):
         "/project [название] — детали проекта\n"
         "/stats — статистика\n"
         "/memory raw — сырые данные из базы\n"
+        "/rename_project Старое | Новое — переименовать проект\n"
     )
 
 
@@ -418,6 +419,36 @@ async def show_stats(message: types.Message):
         text += f"Последняя активность: {last_date}\n"
 
     await message.answer(text)
+
+
+@dp.message(Command("rename_project"))
+async def rename_project(message: types.Message):
+    user_id = message.from_user.id
+    args = message.text.split(maxsplit=1)
+
+    if len(args) < 2 or "|" not in args[1]:
+        await message.answer("Использование:\n" "/rename_project Старое название | Новое название")
+        return
+
+    parts = args[1].split("|", 1)
+    old_name = parts[0].strip()
+    new_name = parts[1].strip()
+
+    if not old_name or not new_name:
+        await message.answer("Оба названия должны быть заполнены.")
+        return
+
+    existing = projects.find_one({"user_id": user_id, "name": {"$regex": f"^{re.escape(old_name)}$", "$options": "i"}})
+
+    if not existing:
+        await message.answer(f"Проект не найден: {old_name}\n\nСписок: /project")
+        return
+
+    projects.update_one(
+        {"_id": existing["_id"]}, {"$set": {"name": new_name, "updated_at": datetime.now(timezone.utc)}}
+    )
+
+    await message.answer(f"Переименовано: {old_name} → {new_name}")
 
 
 @dp.message()
