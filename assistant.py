@@ -1,10 +1,10 @@
 import asyncio
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from dotenv import load_dotenv
 from openai import OpenAI
 from pymongo import MongoClient
@@ -50,7 +50,8 @@ conversations = db["conversations"]
 # ИСТОРИЯ
 # =========================
 
-MAX_HISTORY = 30
+MAX_HISTORY = 50
+
 SYSTEM_PROMPT = """Ты персональный AI ассистент. Общайся только на русском языке.
 У тебя есть память — история наших разговоров сохраняется в базе данных и передаётся тебе при каждом сообщении.
 Давай конкретные и практические ответы. Не лей воду."""
@@ -58,7 +59,7 @@ SYSTEM_PROMPT = """Ты персональный AI ассистент. Обща
 
 def save_message(user_id: int, role: str, content: str):
     conversations.insert_one(
-        {"user_id": user_id, "role": role, "content": content, "created_at": datetime.now(datetime.UTC)}
+        {"user_id": user_id, "role": role, "content": content, "created_at": datetime.now(timezone.utc)}
     )
 
 
@@ -79,6 +80,12 @@ async def start(message: types.Message):
     await message.answer("Привет! Я твой AI ассистент. Напиши что-нибудь!")
 
 
+@dp.message(Command("clear"))
+async def clear_history(message: types.Message):
+    conversations.delete_many({"user_id": message.from_user.id})
+    await message.answer("История очищена.")
+
+
 @dp.message()
 async def handle(message: types.Message):
     if not message.text:
@@ -96,6 +103,10 @@ async def handle(message: types.Message):
         messages = [{"role": "system", "content": SYSTEM_PROMPT}] + history
         response = client.chat.completions.create(model="kr/claude-sonnet-4.5", messages=messages, max_tokens=2000)
         reply = response.choices[0].message.content
+
+        if not reply:
+            reply = "Не удалось получить ответ."
+
         save_message(user_id, "assistant", reply)
         await message.answer(reply)
     except Exception as e:
