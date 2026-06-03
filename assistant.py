@@ -185,9 +185,11 @@ def save_project(user_id: int, project: dict):
         if project.get("status"):
             update["status"] = project["status"]
         if project.get("note"):
-            projects.update_one(
-                {"_id": existing["_id"]}, {"$push": {"notes": {"$each": [project["note"]], "$slice": -20}}}
-            )
+            last_note = existing.get("notes", [])[-1] if existing.get("notes") else None
+            if project["note"] != last_note:
+                projects.update_one(
+                    {"_id": existing["_id"]}, {"$push": {"notes": {"$each": [project["note"]], "$slice": -20}}}
+                )
         projects.update_one({"_id": existing["_id"]}, {"$set": update})
         logger.info(f"Проект обновлён: {project['name']}")
     else:
@@ -444,11 +446,13 @@ async def rename_project(message: types.Message):
         await message.answer(f"Проект не найден: {old_name}\n\nСписок: /project")
         return
 
-    projects.update_one(
-        {"_id": existing["_id"]}, {"$set": {"name": new_name, "updated_at": datetime.now(timezone.utc)}}
-    )
-
-    await message.answer(f"Переименовано: {old_name} → {new_name}")
+    try:
+        projects.update_one(
+            {"_id": existing["_id"]}, {"$set": {"name": new_name, "updated_at": datetime.now(timezone.utc)}}
+        )
+        await message.answer(f"Переименовано: {old_name} → {new_name}")
+    except Exception:
+        await message.answer(f"Проект с названием «{new_name}» уже существует.")
 
 
 @dp.message()
@@ -481,7 +485,7 @@ async def handle(message: types.Message):
                 for p in user_projects:
                     memory_context += f"\n- {p['name']} ({p['status']})"
                     if p.get("notes"):
-                        for note in p["notes"]:
+                        for note in p["notes"][-3:]:
                             memory_context += f"\n  • {note}"
 
         logger.info(f"MEMORY CONTEXT:\n{memory_context}")
