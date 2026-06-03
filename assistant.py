@@ -33,10 +33,7 @@ if missing:
 
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-client = OpenAI(
-    api_key=os.getenv("OMNI_API_KEY"),
-    base_url=os.getenv("OMNI_URL"),
-)
+client = OpenAI(api_key=os.getenv("OMNI_API_KEY"), base_url=os.getenv("OMNI_URL"), timeout=60)
 
 bot = Bot(token=TELEGRAM_TOKEN)
 dp = Dispatcher()
@@ -60,7 +57,9 @@ SYSTEM_PROMPT = """Ты персональный AI ассистент. Обща
 
 
 def save_message(user_id: int, role: str, content: str):
-    conversations.insert_one({"user_id": user_id, "role": role, "content": content, "created_at": datetime.utcnow()})
+    conversations.insert_one(
+        {"user_id": user_id, "role": role, "content": content, "created_at": datetime.now(datetime.UTC)}
+    )
 
 
 def get_history(user_id: int) -> list:
@@ -82,9 +81,15 @@ async def start(message: types.Message):
 
 @dp.message()
 async def handle(message: types.Message):
+    if not message.text:
+        await message.answer("Пока я умею работать только с текстом.")
+        return
+
     user_id = message.from_user.id
 
     save_message(user_id, "user", message.text)
+
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
     try:
         history = get_history(user_id)
