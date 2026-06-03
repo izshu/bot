@@ -19,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # =========================
-# ENVё
+# ENV
 # =========================
 
 load_dotenv()
@@ -211,8 +211,8 @@ async def analyze_memory(user_id: int, message: str):
         existing_projects = get_projects(user_id)
 
         prompt = MEMORY_PROMPT.format(
-            existing_facts=existing_facts,
-            existing_projects=existing_projects,
+            existing_facts=json.dumps(existing_facts, ensure_ascii=False),
+            existing_projects=json.dumps(existing_projects, ensure_ascii=False),
             message=message,
         )
 
