@@ -1,3 +1,4 @@
+import re
 import asyncio
 import json
 import logging
@@ -18,7 +19,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # =========================
-# ENV
+# ENVё
 # =========================
 
 load_dotenv()
@@ -51,6 +52,7 @@ projects = db["projects"]
 
 facts.create_index([("user_id", 1), ("category", 1), ("value", 1)], unique=True)
 projects.create_index([("user_id", 1), ("name", 1)], unique=True)
+conversations.create_index([("user_id", 1), ("created_at", -1)])
 
 # =========================
 # ИСТОРИЯ
@@ -85,6 +87,27 @@ def trim_history(user_id: int, max_messages: int = 500):
     ids = [doc["_id"] for doc in old_docs]
     if ids:
         conversations.delete_many({"_id": {"$in": ids}})
+
+
+# =========================
+# УТИЛИТЫ
+# =========================
+
+
+async def send_long_message(message: types.Message, text: str, chunk_size: int = 4000):
+    if len(text) <= chunk_size:
+        await message.answer(text)
+        return
+    parts = []
+    while len(text) > chunk_size:
+        split_at = text.rfind("\n", 0, chunk_size)
+        if split_at == -1:
+            split_at = chunk_size
+        parts.append(text[:split_at])
+        text = text[split_at:].lstrip()
+    parts.append(text)
+    for part in parts:
+        await message.answer(part)
 
 
 # =========================
@@ -162,7 +185,9 @@ def save_project(user_id: int, project: dict):
         if project.get("status"):
             update["status"] = project["status"]
         if project.get("note"):
-            projects.update_one({"_id": existing["_id"]}, {"$push": {"notes": project["note"]}})
+            projects.update_one(
+                {"_id": existing["_id"]}, {"$push": {"notes": {"$each": [project["note"]], "$slice": -20}}}
+            )
         projects.update_one({"_id": existing["_id"]}, {"$set": update})
         logger.info(f"Проект обновлён: {project['name']}")
     else:
@@ -199,7 +224,6 @@ async def analyze_memory(user_id: int, message: str):
 
         raw = response.choices[0].message.content
         logger.info(f"Memory raw: {raw}")
-
         cleaned = raw.strip()
         if cleaned.startswith("```"):
             lines = cleaned.splitlines()
@@ -208,7 +232,6 @@ async def analyze_memory(user_id: int, message: str):
             if lines and lines[-1].startswith("```"):
                 lines = lines[:-1]
             cleaned = "\n".join(lines).strip()
-
         try:
             parsed = json.loads(cleaned)
             logger.info(f"Memory parsed OK: {parsed}")
@@ -245,13 +268,30 @@ async def help_cmd(message: types.Message):
         "/memory — показать что я помню о тебе\n"
         "/clear — очистить историю диалога\n"
         "/reset — удалить всё (историю, факты, проекты)\n\n"
-        "Я автоматически запоминаю факты о тебе и твоих проектах из разговора."
+        "Я автоматически запоминаю факты о тебе и твоих проектах из разговора.\n\n"
+        "/forget [факт] — удалить факт из памяти (не проекты)\n"
+        "/project — список проектов\n"
+        "/project [название] — детали проекта\n"
+        "/stats — статистика\n"
+        "/memory raw — сырые данные из базы\n"
     )
 
 
 @dp.message(Command("memory"))
 async def show_memory(message: types.Message):
     user_id = message.from_user.id
+    args = message.text.split(maxsplit=1)
+
+    # RAW режим
+    if len(args) > 1 and args[1].strip().lower() == "raw":
+        user_facts = get_facts(user_id)
+        user_projects = get_projects(user_id)
+        raw = {"facts": user_facts, "projects": user_projects}
+        text = json.dumps(raw, ensure_ascii=False, indent=2, default=str)
+        await send_long_message(message, text)
+        return
+
+    # обычный режим
     user_facts = get_facts(user_id)
     user_projects = get_projects(user_id)
 
@@ -260,7 +300,6 @@ async def show_memory(message: types.Message):
         return
 
     text = ""
-
     personal = [f for f in user_facts if f["category"] == "personal"]
     skills = [f for f in user_facts if f["category"] == "skill"]
     goals = [f for f in user_facts if f["category"] == "goal"]
@@ -269,17 +308,14 @@ async def show_memory(message: types.Message):
         text += "👤 Личное:\n"
         for f in personal:
             text += f"  - {f['value']}\n"
-
     if skills:
         text += "\n🛠 Навыки:\n"
         for f in skills:
             text += f"  - {f['value']} ({f['status']})\n"
-
     if goals:
         text += "\n🎯 Цели:\n"
         for f in goals:
             text += f"  - {f['value']} ({f['status']})\n"
-
     if user_projects:
         text += "\n📁 Проекты:\n"
         for p in user_projects:
@@ -303,6 +339,87 @@ async def reset_all(message: types.Message):
     await message.answer("Полный сброс. История, факты и проекты удалены.")
 
 
+@dp.message(Command("forget"))
+async def forget_fact(message: types.Message):
+    user_id = message.from_user.id
+    args = message.text.split(maxsplit=1)
+
+    if len(args) < 2:
+        await message.answer("Укажи что забыть.\n\n" "Пример:\n" "/forget Python")
+        return
+
+    value = args[1].strip()
+
+    result = facts.delete_one({"user_id": user_id, "value": {"$regex": f"^{re.escape(value)}$", "$options": "i"}})
+
+    if result.deleted_count:
+        await message.answer(f"Забыл: {value}")
+    else:
+        await message.answer(f"Не нашёл в памяти: {value}\n\n" "Посмотри /memory что именно записано.")
+
+
+@dp.message(Command("project"))
+async def show_project(message: types.Message):
+    user_id = message.from_user.id
+    args = message.text.split(maxsplit=1)
+
+    if len(args) < 2:
+        user_projects = get_projects(user_id)
+        if not user_projects:
+            await message.answer("Проектов нет.")
+            return
+        text = "📁 Проекты:\n\n"
+        for p in user_projects:
+            text += f"• {p['name']} ({p['status']})\n"
+        text += "\nДетали: /project [название]"
+        await message.answer(text)
+        return
+
+    name = args[1].strip()
+    project = projects.find_one({"user_id": user_id, "name": {"$regex": f"^{re.escape(name)}$", "$options": "i"}})
+
+    if not project:
+        await message.answer(f"Проект не найден: {name}\n\nСписок: /project")
+        return
+
+    text = f"📁 {project['name']}\n"
+    text += f"Статус: {project['status']}\n"
+    if project.get("description"):
+        text += f"Описание: {project['description']}\n"
+    if project.get("notes"):
+        text += f"\nЗаметки:\n"
+        for note in project["notes"]:
+            text += f"  • {note}\n"
+    else:
+        text += "\nЗаметок пока нет.\n"
+    await send_long_message(message, text)
+
+
+@dp.message(Command("stats"))
+async def show_stats(message: types.Message):
+    user_id = message.from_user.id
+
+    msg_count = conversations.count_documents({"user_id": user_id})
+    facts_count = facts.count_documents({"user_id": user_id})
+    projects_count = projects.count_documents({"user_id": user_id})
+
+    first = conversations.find_one({"user_id": user_id}, sort=[("created_at", 1)])
+    last = conversations.find_one({"user_id": user_id}, sort=[("created_at", -1)])
+
+    text = "📊 Статистика\n\n"
+    text += f"Сообщений: {msg_count}\n"
+    text += f"Фактов: {facts_count}\n"
+    text += f"Проектов: {projects_count}\n"
+
+    if first and last:
+        first_date = first["created_at"].strftime("%d.%m.%Y %H:%M")
+        last_date = last["created_at"].strftime("%d.%m.%Y %H:%M")
+        text += f"\nПервое сообщение: {first_date}\n"
+        text += f"Последняя активность: {last_date}\n"
+
+    await message.answer(text)
+
+
 @dp.message()
 async def handle(message: types.Message):
     if not message.text:
@@ -312,8 +429,6 @@ async def handle(message: types.Message):
     user_id = message.from_user.id
 
     save_message(user_id, "user", message.text)
-
-    trim_history(user_id)
 
     await bot.send_chat_action(chat_id=message.chat.id, action="typing")
 
@@ -347,7 +462,8 @@ async def handle(message: types.Message):
             reply = "Не удалось получить ответ."
 
         save_message(user_id, "assistant", reply)
-        await message.answer(reply)
+        trim_history(user_id)
+        await send_long_message(message, reply)
 
         asyncio.create_task(analyze_memory(user_id, message.text))
 
